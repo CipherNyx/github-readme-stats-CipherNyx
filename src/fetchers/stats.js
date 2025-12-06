@@ -1,3 +1,4 @@
+// src/fetchers/stats.js
 // @ts-check
 
 import axios from "axios";
@@ -10,8 +11,6 @@ import { excludeRepositories } from "../common/envs.js";
 import { CustomError, MissingParamError } from "../common/error.js";
 import { wrapTextMultiline } from "../common/fmt.js";
 import { request } from "../common/http.js";
-
-import { githubToken } from "../common/envs.js";
 
 dotenv.config();
 
@@ -120,7 +119,7 @@ const statsFetcher = async ({
   includeDiscussionsAnswers,
   startTime,
 }) => {
-  let stats;
+  let accumulated = null;
   let hasNextPage = true;
   let endCursor = null;
 
@@ -129,38 +128,73 @@ const statsFetcher = async ({
       login: username,
       first: 100,
       after: endCursor,
-      includeMergedPullRequests,
-      includeDiscussions,
-      includeDiscussionsAnswers,
+      includeMergedPullRequests: Boolean(includeMergedPullRequests),
+      includeDiscussions: Boolean(includeDiscussions),
+      includeDiscussionsAnswers: Boolean(includeDiscussionsAnswers),
       startTime,
     };
 
     // Let retryer pick PAT_1, PAT_2, …
-    let res = await retryer(fetcher, variables);
+    // retryer is expected to call fetcher(variables, token)
+    const res = await retryer(fetcher, variables);
 
+    // Defensive checks
+    if (!res || !res.data) {
+      throw new CustomError(
+        "Empty response from GitHub API",
+        CustomError.GRAPHQL_ERROR,
+      );
+    }
+
+    // If GraphQL returned errors, bubble them up to caller (handler will format)
     if (res.data.errors) {
       return res;
     }
 
+    const user = res.data.data && res.data.data.user;
+    if (!user || !user.repositories) {
+      // Return the response so caller can handle NOT_FOUND or other GraphQL errors
+      return res;
+    }
 
-    const repoNodes = res.data.data.user.repositories.nodes;
-    if (stats) {
-      stats.data.data.user.repositories.nodes.push(...repoNodes);
+    const repoField = res.data.data.user.repositories;
+    const repoNodes = Array.isArray(repoField.nodes) ? repoField.nodes : [];
+
+    if (!accumulated) {
+      // Create a fresh accumulator to avoid mutating the original response object
+      accumulated = {
+        data: {
+          data: {
+            user: {
+              ...user,
+              repositories: {
+                totalCount: repoField.totalCount,
+                nodes: [...repoNodes],
+                pageInfo: repoField.pageInfo,
+              },
+            },
+          },
+        },
+      };
     } else {
-      stats = res;
+      accumulated.data.data.user.repositories.nodes.push(...repoNodes);
+      // update pageInfo for next iteration
+      accumulated.data.data.user.repositories.pageInfo = repoField.pageInfo;
     }
 
     const repoNodesWithStars = repoNodes.filter(
-      (node) => node.stargazers.totalCount !== 0,
+      (node) => node && node.stargazers && node.stargazers.totalCount !== 0,
     );
+
     hasNextPage =
       process.env.FETCH_MULTI_PAGE_STARS === "true" &&
       repoNodes.length === repoNodesWithStars.length &&
-      res.data.data.user.repositories.pageInfo.hasNextPage;
-    endCursor = res.data.data.user.repositories.pageInfo.endCursor;
+      Boolean(repoField.pageInfo && repoField.pageInfo.hasNextPage);
+
+    endCursor = repoField.pageInfo ? repoField.pageInfo.endCursor : null;
   }
 
-  return stats;
+  return accumulated;
 };
 
 /**
@@ -201,14 +235,15 @@ const totalCommitsFetcher = async (username) => {
 
   let res;
   try {
+    // retryer will inject the token as the second argument to fetchTotalCommits
     res = await retryer(fetchTotalCommits, { login: username });
   } catch (err) {
     logger.log(err);
     throw new Error(err);
   }
 
-  const totalCount = res.data.total_count;
-  if (!totalCount || isNaN(totalCount)) {
+  const totalCount = Number(res?.data?.total_count);
+  if (Number.isNaN(totalCount)) {
     throw new CustomError(
       "Could not fetch total commits.",
       CustomError.GITHUB_REST_API_ERROR,
@@ -257,7 +292,7 @@ const fetchStats = async (
     rank: { level: "C", percentile: 100 },
   };
 
-  let res = await statsFetcher({
+  const res = await statsFetcher({
     username,
     includeMergedPullRequests: include_merged_pull_requests,
     includeDiscussions: include_discussions,
@@ -265,16 +300,23 @@ const fetchStats = async (
     startTime: commits_year ? `${commits_year}-01-01T00:00:00Z` : undefined,
   });
 
-  // Catch GraphQL errors.
+  // If GraphQL returned errors, handle them
+  if (!res || !res.data) {
+    throw new CustomError(
+      "Something went wrong while trying to retrieve the stats data using the GraphQL API.",
+      CustomError.GRAPHQL_ERROR,
+    );
+  }
+
   if (res.data.errors) {
     logger.error(res.data.errors);
-    if (res.data.errors[0].type === "NOT_FOUND") {
+    if (res.data.errors[0] && res.data.errors[0].type === "NOT_FOUND") {
       throw new CustomError(
         res.data.errors[0].message || "Could not fetch user.",
         CustomError.USER_NOT_FOUND,
       );
     }
-    if (res.data.errors[0].message) {
+    if (res.data.errors[0] && res.data.errors[0].message) {
       throw new CustomError(
         wrapTextMultiline(res.data.errors[0].message, 90, 1)[0],
         res.statusText,
@@ -288,43 +330,55 @@ const fetchStats = async (
 
   const user = res.data.data.user;
 
+  if (!user) {
+    throw new CustomError("User data missing from GitHub response", CustomError.GRAPHQL_ERROR);
+  }
+
   stats.name = user.name || user.login;
 
   // if include_all_commits, fetch all commits using the REST API.
   if (include_all_commits) {
     stats.totalCommits = await totalCommitsFetcher(username);
   } else {
-    stats.totalCommits = user.commits.totalCommitContributions;
+    stats.totalCommits = user.commits ? user.commits.totalCommitContributions : 0;
   }
 
-  stats.totalPRs = user.pullRequests.totalCount;
-  if (include_merged_pull_requests) {
+  stats.totalPRs = user.pullRequests ? user.pullRequests.totalCount : 0;
+  if (include_merged_pull_requests && user.mergedPullRequests) {
     stats.totalPRsMerged = user.mergedPullRequests.totalCount;
     stats.mergedPRsPercentage =
-      (user.mergedPullRequests.totalCount / user.pullRequests.totalCount) *
-      100 || 0;
+      (user.mergedPullRequests.totalCount / (user.pullRequests?.totalCount || 1)) * 100 || 0;
   }
-  stats.totalReviews = user.reviews.totalPullRequestReviewContributions;
-  stats.totalIssues = user.openIssues.totalCount + user.closedIssues.totalCount;
-  if (include_discussions) {
+  stats.totalReviews = user.reviews ? user.reviews.totalPullRequestReviewContributions : 0;
+  stats.totalIssues =
+    (user.openIssues ? user.openIssues.totalCount : 0) +
+    (user.closedIssues ? user.closedIssues.totalCount : 0);
+  if (include_discussions && user.repositoryDiscussions) {
     stats.totalDiscussionsStarted = user.repositoryDiscussions.totalCount;
   }
-  if (include_discussions_answers) {
-    stats.totalDiscussionsAnswered =
-      user.repositoryDiscussionComments.totalCount;
+  if (include_discussions_answers && user.repositoryDiscussionComments) {
+    stats.totalDiscussionsAnswered = user.repositoryDiscussionComments.totalCount;
   }
-  stats.contributedTo = user.repositoriesContributedTo.totalCount;
+  stats.contributedTo = user.repositoriesContributedTo
+    ? user.repositoriesContributedTo.totalCount
+    : 0;
 
   // Retrieve stars while filtering out repositories to be hidden.
-  const allExcludedRepos = [...exclude_repo, ...excludeRepositories];
-  let repoToHide = new Set(allExcludedRepos);
+  const allExcludedRepos = [...exclude_repo, ...excludeRepositories].map((r) =>
+    String(r || "").toLowerCase(),
+  );
+  const repoToHide = new Set(allExcludedRepos);
 
-  stats.totalStars = user.repositories.nodes
+  const repoNodes = Array.isArray(user.repositories?.nodes) ? user.repositories.nodes : [];
+
+  stats.totalStars = repoNodes
     .filter((data) => {
-      return !repoToHide.has(data.name);
+      if (!data || !data.name) return false;
+      return !repoToHide.has(String(data.name).toLowerCase());
     })
     .reduce((prev, curr) => {
-      return prev + curr.stargazers.totalCount;
+      const count = curr?.stargazers?.totalCount || 0;
+      return prev + count;
     }, 0);
 
   stats.rank = calculateRank({
@@ -333,9 +387,9 @@ const fetchStats = async (
     prs: stats.totalPRs,
     reviews: stats.totalReviews,
     issues: stats.totalIssues,
-    repos: user.repositories.totalCount,
+    repos: user.repositories ? user.repositories.totalCount : 0,
     stars: stats.totalStars,
-    followers: user.followers.totalCount,
+    followers: user.followers ? user.followers.totalCount : 0,
   });
 
   return stats;

@@ -21,7 +21,6 @@ const fetcher = (variables, token) => {
       query: `
       query userInfo($login: String!) {
         user(login: $login) {
-          # fetch only owner repos & not forks
           repositories(ownerAffiliations: OWNER, isFork: false, first: 100) {
             nodes {
               name
@@ -42,7 +41,7 @@ const fetcher = (variables, token) => {
       variables,
     },
     {
-      Authorization: `bearer ${token}`, // <-- use bearer here
+      Authorization: `bearer ${token}`,
     },
   );
 };
@@ -72,15 +71,23 @@ const fetchTopLanguages = async (
 
   const res = await retryer(fetcher, { login: username });
 
+  // Defensive checks
+  if (!res || !res.data) {
+    throw new CustomError(
+      "Empty response from GitHub API",
+      CustomError.GRAPHQL_ERROR,
+    );
+  }
+
   if (res.data.errors) {
     logger.error(res.data.errors);
-    if (res.data.errors[0].type === "NOT_FOUND") {
+    if (res.data.errors[0] && res.data.errors[0].type === "NOT_FOUND") {
       throw new CustomError(
         res.data.errors[0].message || "Could not fetch user.",
         CustomError.USER_NOT_FOUND,
       );
     }
-    if (res.data.errors[0].message) {
+    if (res.data.errors[0] && res.data.errors[0].message) {
       throw new CustomError(
         wrapTextMultiline(res.data.errors[0].message, 90, 1)[0],
         res.statusText,
@@ -92,56 +99,68 @@ const fetchTopLanguages = async (
     );
   }
 
-  let repoNodes = res.data.data.user.repositories.nodes;
-  /** @type {Record<string, boolean>} */
-  let repoToHide = {};
-  const allExcludedRepos = [...exclude_repo, ...excludeRepositories];
+  const user = res.data.data && res.data.data.user;
+  const repoNodes = Array.isArray(user?.repositories?.nodes) ? user.repositories.nodes : [];
 
-  if (allExcludedRepos) {
-    allExcludedRepos.forEach((repoName) => {
-      repoToHide[repoName] = true;
-    });
-  }
+  // Build exclusion set (lowercased) from both caller and env
+  const allExcluded = [...(exclude_repo || []), ...(excludeRepositories || [])]
+    .map((r) => String(r || "").trim().toLowerCase())
+    .filter(Boolean);
+  const excludedSet = new Set(allExcluded);
 
-  repoNodes = repoNodes.filter((name) => !repoToHide[name.name]);
-
-  let repoCount = 0;
-
-  repoNodes = repoNodes
-    .filter((node) => node.languages.edges.length > 0)
-    .reduce((acc, curr) => curr.languages.edges.concat(acc), [])
-    .reduce((acc, prev) => {
-      let langSize = prev.size;
-
-      if (acc[prev.node.name] && prev.node.name === acc[prev.node.name].name) {
-        langSize = prev.size + acc[prev.node.name].size;
-        repoCount += 1;
-      } else {
-        repoCount = 1;
-      }
-      return {
-        ...acc,
-        [prev.node.name]: {
-          name: prev.node.name,
-          color: prev.node.color,
-          size: langSize,
-          count: repoCount,
-        },
-      };
-    }, {});
-
-  Object.keys(repoNodes).forEach((name) => {
-    repoNodes[name].size =
-      Math.pow(repoNodes[name].size, size_weight) *
-      Math.pow(repoNodes[name].count, count_weight);
+  // Filter out excluded repos and repos without languages
+  const filteredRepos = repoNodes.filter((repo) => {
+    if (!repo || !repo.name) return false;
+    const repoName = String(repo.name).toLowerCase();
+    if (excludedSet.has(repoName)) return false;
+    return Array.isArray(repo.languages?.edges) && repo.languages.edges.length > 0;
   });
 
-  const topLangs = Object.keys(repoNodes)
-    .sort((a, b) => repoNodes[b].size - repoNodes[a].size)
-    .reduce((result, key) => {
-      result[key] = repoNodes[key];
-      return result;
-    }, {});
+  // Aggregate languages across repositories
+  /** @type {Record<string, { name: string; color?: string; size: number; count: number }>} */
+  const langMap = {};
+
+  for (const repo of filteredRepos) {
+    // Use a Set to ensure each language is counted once per repo for 'count'
+    const seenInThisRepo = new Set();
+    const edges = Array.isArray(repo.languages.edges) ? repo.languages.edges : [];
+
+    for (const edge of edges) {
+      if (!edge || !edge.node || !edge.node.name) continue;
+      const langName = String(edge.node.name);
+      const langKey = langName; // keep original casing for keys
+      const size = Number(edge.size) || 0;
+      const color = edge.node.color || undefined;
+
+      if (!langMap[langKey]) {
+        langMap[langKey] = { name: langName, color, size: 0, count: 0 };
+      }
+
+      // accumulate size
+      langMap[langKey].size += size;
+
+      // increment count once per repo per language
+      if (!seenInThisRepo.has(langKey)) {
+        langMap[langKey].count += 1;
+        seenInThisRepo.add(langKey);
+      }
+    }
+  }
+
+  // Apply weights
+  Object.keys(langMap).forEach((k) => {
+    const entry = langMap[k];
+    entry.size = Math.pow(entry.size, Number(size_weight) || 1) * Math.pow(entry.count, Number(count_weight) || 0);
+  });
+
+  // Sort by computed size descending and return an ordered object
+  const sortedKeys = Object.keys(langMap).sort((a, b) => langMap[b].size - langMap[a].size);
+
+  /** @type {Record<string, { name: string; color?: string; size: number; count: number }>} */
+  const topLangs = {};
+  for (const key of sortedKeys) {
+    topLangs[key] = langMap[key];
+  }
 
   return topLangs;
 };

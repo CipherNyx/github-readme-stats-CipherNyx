@@ -17,8 +17,6 @@ import { parseArray, parseBoolean } from "../src/common/ops.js";
 import { renderError } from "../src/common/render.js";
 import { fetchTopLanguages } from "../src/fetchers/top-languages.js";
 import { isLocaleAvailable } from "../src/translations.js";
-import { githubToken } from "../src/common/envs.js";
-
 
 // @ts-ignore
 export default async (req, res) => {
@@ -95,8 +93,7 @@ export default async (req, res) => {
   // Stats format validation
   if (
     stats_format !== undefined &&
-    (typeof stats_format !== "string" ||
-      !["bytes", "percentages"].includes(stats_format))
+    (typeof stats_format !== "string" || !["bytes", "percentages"].includes(stats_format))
   ) {
     return res.send(
       renderError({
@@ -108,18 +105,19 @@ export default async (req, res) => {
   }
 
   try {
-    if (!githubToken) {
-      throw new Error("No GitHub PAT found in environment");
-    }
+    // Parse numeric inputs safely
+    const parsedSizeWeight = Number(size_weight ?? 1);
+    const parsedCountWeight = Number(count_weight ?? 0);
+    const parsedLangsCount = langs_count ? parseInt(langs_count, 10) : undefined;
+    const parsedCardWidth = card_width ? parseInt(card_width, 10) : undefined;
 
+    // fetchTopLanguages will throw if tokens are missing (via retryer)
     const topLangs = await fetchTopLanguages(
       username,
       parseArray(exclude_repo),
-      size_weight,
-      count_weight,
+      Number.isFinite(parsedSizeWeight) ? parsedSizeWeight : 1,
+      Number.isFinite(parsedCountWeight) ? parsedCountWeight : 0,
     );
-
-
 
     const cacheSeconds = resolveCacheSeconds({
       requested: parseInt(cache_seconds, 10),
@@ -135,14 +133,14 @@ export default async (req, res) => {
         custom_title,
         hide_title: parseBoolean(hide_title),
         hide_border: parseBoolean(hide_border),
-        card_width: parseInt(card_width, 10),
+        card_width: parsedCardWidth,
         hide: parseArray(hide),
         title_color,
         text_color,
         bg_color,
         theme,
         layout,
-        langs_count,
+        langs_count: parsedLangsCount,
         border_radius,
         border_color,
         locale: locale ? locale.toLowerCase() : null,

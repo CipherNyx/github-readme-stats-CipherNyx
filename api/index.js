@@ -1,3 +1,4 @@
+// api/index.js
 // @ts-check
 
 import { renderStatsCard } from "../src/cards/stats.js";
@@ -49,8 +50,10 @@ export default async (req, res) => {
     rank_icon,
     show,
   } = req.query;
+
   res.setHeader("Content-Type", "image/svg+xml");
 
+  // Whitelist / access guard
   const access = guardAccess({
     res,
     id: username,
@@ -67,34 +70,40 @@ export default async (req, res) => {
     return access.result;
   }
 
+  // Locale validation
   if (locale && !isLocaleAvailable(locale)) {
     return res.send(
       renderError({
         message: "Something went wrong",
         secondaryMessage: "Language not found",
-        renderOptions: {
-          title_color,
-          text_color,
-          bg_color,
-          border_color,
-          theme,
-        },
+        renderOptions: { title_color, text_color, bg_color, border_color, theme },
       }),
     );
   }
 
   try {
+    // Optional safe debug (uncomment while debugging; do NOT log token values)
+    // console.log('PAT_1 present:', Boolean(process.env.PAT_1));
+    // console.log('PAT_* count:', Object.keys(process.env).filter(k => /^PAT_\\d+$/.test(k)).length);
+
+    // Normalize inputs
     const showStats = parseArray(show);
+    const parsedIncludeAllCommits = parseBoolean(include_all_commits);
+    const parsedCommitsYear = commits_year ? parseInt(commits_year, 10) : undefined;
+    const parsedCardWidth = card_width ? parseInt(card_width, 10) : undefined;
+    const parsedNumberPrecision = number_precision ? parseInt(number_precision, 10) : undefined;
+
+    // Fetch stats (retryer will handle token selection and errors)
     const stats = await fetchStats(
       username,
-      parseBoolean(include_all_commits),
+      parsedIncludeAllCommits,
       parseArray(exclude_repo),
-      showStats.includes("prs_merged") ||
-        showStats.includes("prs_merged_percentage"),
+      showStats.includes("prs_merged") || showStats.includes("prs_merged_percentage"),
       showStats.includes("discussions_started"),
       showStats.includes("discussions_answered"),
-      parseInt(commits_year, 10),
+      parsedCommitsYear,
     );
+
     const cacheSeconds = resolveCacheSeconds({
       requested: parseInt(cache_seconds, 10),
       def: CACHE_TTL.STATS_CARD.DEFAULT,
@@ -110,10 +119,10 @@ export default async (req, res) => {
         show_icons: parseBoolean(show_icons),
         hide_title: parseBoolean(hide_title),
         hide_border: parseBoolean(hide_border),
-        card_width: parseInt(card_width, 10),
+        card_width: parsedCardWidth,
         hide_rank: parseBoolean(hide_rank),
-        include_all_commits: parseBoolean(include_all_commits),
-        commits_year: parseInt(commits_year, 10),
+        include_all_commits: parsedIncludeAllCommits,
+        commits_year: parsedCommitsYear,
         line_height,
         title_color,
         ring_color,
@@ -126,7 +135,7 @@ export default async (req, res) => {
         border_radius,
         border_color,
         number_format,
-        number_precision: parseInt(number_precision, 10),
+        number_precision: parsedNumberPrecision,
         locale: locale ? locale.toLowerCase() : null,
         disable_animations: parseBoolean(disable_animations),
         rank_icon,
@@ -154,13 +163,7 @@ export default async (req, res) => {
     return res.send(
       renderError({
         message: "An unknown error occurred",
-        renderOptions: {
-          title_color,
-          text_color,
-          bg_color,
-          border_color,
-          theme,
-        },
+        renderOptions: { title_color, text_color, bg_color, border_color, theme },
       }),
     );
   }
