@@ -11,6 +11,8 @@ import { CustomError, MissingParamError } from "../common/error.js";
 import { wrapTextMultiline } from "../common/fmt.js";
 import { request } from "../common/http.js";
 
+import { githubToken } from "../common/envs.js";
+
 dotenv.config();
 
 // GraphQL queries.
@@ -140,7 +142,7 @@ const statsFetcher = async ({
     };
 
     // Pass token into fetcher
-    let res = await retryer(fetcher, variables, token);
+let res = await retryer(fetcher, variables, githubToken);
     if (res.data.errors) {
       return res;
     }

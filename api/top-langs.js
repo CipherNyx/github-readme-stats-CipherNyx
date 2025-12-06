@@ -17,7 +17,8 @@ import { parseArray, parseBoolean } from "../src/common/ops.js";
 import { renderError } from "../src/common/render.js";
 import { fetchTopLanguages } from "../src/fetchers/top-languages.js";
 import { isLocaleAvailable } from "../src/translations.js";
-import { githubToken } from "../src/common/envs.js"; // <-- add this in envs.js
+import { githubToken } from "../src/common/envs.js";
+
 
 // @ts-ignore
 export default async (req, res) => {
@@ -111,13 +112,14 @@ export default async (req, res) => {
       throw new Error("No GitHub PAT found in environment");
     }
 
-    const topLangs = await fetchTopLanguages(
-      username,
-      parseArray(exclude_repo),
-      size_weight,
-      count_weight,
-      githubToken, // <-- pass token into fetcher
-    );
+const topLangs = await fetchTopLanguages(
+  username,
+  parseArray(exclude_repo),
+  size_weight,
+  count_weight,
+  githubToken, 
+);
+
 
     const cacheSeconds = resolveCacheSeconds({
       requested: parseInt(cache_seconds, 10),

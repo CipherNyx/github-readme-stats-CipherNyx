@@ -1,8 +1,9 @@
+// src/fetchers/top-languages.js
 // @ts-check
 
 import { retryer } from "../common/retryer.js";
 import { logger } from "../common/log.js";
-import { excludeRepositories } from "../common/envs.js";
+import { excludeRepositories, githubToken } from "../common/envs.js";
 import { CustomError, MissingParamError } from "../common/error.js";
 import { wrapTextMultiline } from "../common/fmt.js";
 import { request } from "../common/http.js";
@@ -41,7 +42,7 @@ const fetcher = (variables, token) => {
       variables,
     },
     {
-      Authorization: `token ${token}`,
+      Authorization: `bearer ${token}`, // <-- use bearer here
     },
   );
 };
@@ -69,7 +70,12 @@ const fetchTopLanguages = async (
     throw new MissingParamError(["username"]);
   }
 
-  const res = await retryer(fetcher, { login: username });
+  if (!githubToken) {
+    throw new CustomError("No GitHub PAT found", CustomError.NO_TOKENS);
+  }
+
+  // Pass token into retryer
+  const res = await retryer(fetcher, { login: username }, 0);
 
   if (res.data.errors) {
     logger.error(res.data.errors);
@@ -96,15 +102,12 @@ const fetchTopLanguages = async (
   let repoToHide = {};
   const allExcludedRepos = [...exclude_repo, ...excludeRepositories];
 
-  // populate repoToHide map for quick lookup
-  // while filtering out
   if (allExcludedRepos) {
     allExcludedRepos.forEach((repoName) => {
       repoToHide[repoName] = true;
     });
   }
 
-  // filter out repositories to be hidden
   repoNodes = repoNodes
     .sort((a, b) => b.size - a.size)
     .filter((name) => !repoToHide[name.name]);
@@ -113,21 +116,14 @@ const fetchTopLanguages = async (
 
   repoNodes = repoNodes
     .filter((node) => node.languages.edges.length > 0)
-    // flatten the list of language nodes
     .reduce((acc, curr) => curr.languages.edges.concat(acc), [])
     .reduce((acc, prev) => {
-      // get the size of the language (bytes)
       let langSize = prev.size;
 
-      // if we already have the language in the accumulator
-      // & the current language name is same as previous name
-      // add the size to the language size and increase repoCount.
       if (acc[prev.node.name] && prev.node.name === acc[prev.node.name].name) {
         langSize = prev.size + acc[prev.node.name].size;
         repoCount += 1;
       } else {
-        // reset repoCount to 1
-        // language must exist in at least one repo to be detected
         repoCount = 1;
       }
       return {
@@ -142,7 +138,6 @@ const fetchTopLanguages = async (
     }, {});
 
   Object.keys(repoNodes).forEach((name) => {
-    // comparison index calculation
     repoNodes[name].size =
       Math.pow(repoNodes[name].size, size_weight) *
       Math.pow(repoNodes[name].count, count_weight);
