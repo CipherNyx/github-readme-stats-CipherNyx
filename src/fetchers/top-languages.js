@@ -16,12 +16,15 @@ import { request } from "../common/http.js";
  * @returns {Promise<import("axios").AxiosResponse>} Languages fetcher response.
  */
 const fetcher = (variables, token) => {
+  // Query both user and organization in the same request. We'll prefer user result and
+  // fallback to organization if user is null. This avoids an extra round-trip.
   return request(
     {
       query: `
-      query userInfo($login: String!) {
-        user(login: $login) {
+      query topLangs($login: String!) {
+        user: user(login: $login) {
           repositories(ownerAffiliations: OWNER, isFork: false, first: 100) {
+            totalCount
             nodes {
               name
               languages(first: 10, orderBy: {field: SIZE, direction: DESC}) {
@@ -33,6 +36,31 @@ const fetcher = (variables, token) => {
                   }
                 }
               }
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+          }
+        }
+        org: organization(login: $login) {
+          repositories(ownerAffiliations: OWNER, isFork: false, first: 100) {
+            totalCount
+            nodes {
+              name
+              languages(first: 10, orderBy: {field: SIZE, direction: DESC}) {
+                edges {
+                  size
+                  node {
+                    color
+                    name
+                  }
+                }
+              }
+            }
+            pageInfo {
+              hasNextPage
+              endCursor
             }
           }
         }
@@ -51,9 +79,9 @@ const fetcher = (variables, token) => {
  */
 
 /**
- * Fetch top languages for a given username.
+ * Fetch top languages for a given username or organization.
  *
- * @param {string} username GitHub username.
+ * @param {string} username GitHub username or organization login.
  * @param {string[]} exclude_repo List of repositories to exclude.
  * @param {number} size_weight Weightage to be given to size.
  * @param {number} count_weight Weightage to be given to count.
@@ -69,6 +97,7 @@ const fetchTopLanguages = async (
     throw new MissingParamError(["username"]);
   }
 
+  // Run the combined user/org query via retryer (retryer will inject token)
   const res = await retryer(fetcher, { login: username });
 
   // Defensive checks
@@ -83,7 +112,7 @@ const fetchTopLanguages = async (
     logger.error(res.data.errors);
     if (res.data.errors[0] && res.data.errors[0].type === "NOT_FOUND") {
       throw new CustomError(
-        res.data.errors[0].message || "Could not fetch user.",
+        res.data.errors[0].message || "Could not fetch user or organization.",
         CustomError.USER_NOT_FOUND,
       );
     }
@@ -99,8 +128,21 @@ const fetchTopLanguages = async (
     );
   }
 
-  const user = res.data.data && res.data.data.user;
-  const repoNodes = Array.isArray(user?.repositories?.nodes) ? user.repositories.nodes : [];
+  // Prefer user result; fallback to org result
+  const userNode = res.data.data?.user;
+  const orgNode = res.data.data?.org;
+  const repoContainer = userNode?.repositories || orgNode?.repositories;
+
+  if (!repoContainer) {
+    // If neither user nor org repositories are present, surface the original response
+    // so caller can handle NOT_FOUND or other GraphQL messages.
+    throw new CustomError(
+      "Could not resolve to a User or Organization with the provided login.",
+      CustomError.USER_NOT_FOUND,
+    );
+  }
+
+  const repoNodes = Array.isArray(repoContainer.nodes) ? repoContainer.nodes : [];
 
   // Build exclusion set (lowercased) from both caller and env
   const allExcluded = [...(exclude_repo || []), ...(excludeRepositories || [])]
@@ -128,7 +170,7 @@ const fetchTopLanguages = async (
     for (const edge of edges) {
       if (!edge || !edge.node || !edge.node.name) continue;
       const langName = String(edge.node.name);
-      const langKey = langName; // keep original casing for keys
+      const langKey = langName; // preserve original casing for keys
       const size = Number(edge.size) || 0;
       const color = edge.node.color || undefined;
 
@@ -150,7 +192,9 @@ const fetchTopLanguages = async (
   // Apply weights
   Object.keys(langMap).forEach((k) => {
     const entry = langMap[k];
-    entry.size = Math.pow(entry.size, Number(size_weight) || 1) * Math.pow(entry.count, Number(count_weight) || 0);
+    entry.size =
+      Math.pow(entry.size, Number(size_weight) || 1) *
+      Math.pow(entry.count, Number(count_weight) || 0);
   });
 
   // Sort by computed size descending and return an ordered object
