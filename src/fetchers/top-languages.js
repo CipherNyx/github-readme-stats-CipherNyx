@@ -3,7 +3,7 @@
 
 import { retryer } from "../common/retryer.js";
 import { logger } from "../common/log.js";
-import { excludeRepositories, githubToken } from "../common/envs.js";
+import { excludeRepositories } from "../common/envs.js";
 import { CustomError, MissingParamError } from "../common/error.js";
 import { wrapTextMultiline } from "../common/fmt.js";
 import { request } from "../common/http.js";
@@ -70,12 +70,7 @@ const fetchTopLanguages = async (
     throw new MissingParamError(["username"]);
   }
 
-  if (!githubToken) {
-    throw new CustomError("No GitHub PAT found", CustomError.NO_TOKENS);
-  }
-
-  // Pass token into retryer
-  const res = await retryer(fetcher, { login: username }, 0);
+  const res = await retryer(fetcher, { login: username });
 
   if (res.data.errors) {
     logger.error(res.data.errors);
@@ -108,9 +103,7 @@ const fetchTopLanguages = async (
     });
   }
 
-  repoNodes = repoNodes
-    .sort((a, b) => b.size - a.size)
-    .filter((name) => !repoToHide[name.name]);
+  repoNodes = repoNodes.filter((name) => !repoToHide[name.name]);
 
   let repoCount = 0;
 

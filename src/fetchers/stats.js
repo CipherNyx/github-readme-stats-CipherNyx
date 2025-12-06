@@ -124,12 +124,6 @@ const statsFetcher = async ({
   let hasNextPage = true;
   let endCursor = null;
 
-  // Pick up token from environment
-  const token = process.env.PAT || process.env.PAT_1 || process.env.GITHUB_TOKEN;
-  if (!token) {
-    throw new Error("No GitHub PAT found in environment");
-  }
-
   while (hasNextPage) {
     const variables = {
       login: username,
@@ -141,11 +135,13 @@ const statsFetcher = async ({
       startTime,
     };
 
-    // Pass token into fetcher
-let res = await retryer(fetcher, variables, githubToken);
+    // Let retryer pick PAT_1, PAT_2, …
+    let res = await retryer(fetcher, variables);
+
     if (res.data.errors) {
       return res;
     }
+
 
     const repoNodes = res.data.data.user.repositories.nodes;
     if (stats) {
@@ -306,7 +302,7 @@ const fetchStats = async (
     stats.totalPRsMerged = user.mergedPullRequests.totalCount;
     stats.mergedPRsPercentage =
       (user.mergedPullRequests.totalCount / user.pullRequests.totalCount) *
-        100 || 0;
+      100 || 0;
   }
   stats.totalReviews = user.reviews.totalPullRequestReviewContributions;
   stats.totalIssues = user.openIssues.totalCount + user.closedIssues.totalCount;

@@ -112,13 +112,13 @@ export default async (req, res) => {
       throw new Error("No GitHub PAT found in environment");
     }
 
-const topLangs = await fetchTopLanguages(
-  username,
-  parseArray(exclude_repo),
-  size_weight,
-  count_weight,
-  githubToken, 
-);
+    const topLangs = await fetchTopLanguages(
+      username,
+      parseArray(exclude_repo),
+      size_weight,
+      count_weight,
+    );
+
 
 
     const cacheSeconds = resolveCacheSeconds({
