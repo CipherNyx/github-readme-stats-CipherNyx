@@ -35,4 +35,15 @@ const excludeRepositories = process.env.EXCLUDE_REPO
   ? toArray(process.env.EXCLUDE_REPO)
   : [];
 
-export { whitelist, gistWhitelist, excludeRepositories };
+/**
+ * GitHub Personal Access Token.
+ * Supports multiple tokens (PAT_1, PAT_2, …) or a single PAT/GITHUB_TOKEN.
+ */
+const githubToken =
+  process.env.PAT ||
+  process.env.GITHUB_TOKEN ||
+  process.env.PAT_1 ||
+  process.env.PAT_2 ||
+  null;
+
+export { whitelist, gistWhitelist, excludeRepositories, githubToken };

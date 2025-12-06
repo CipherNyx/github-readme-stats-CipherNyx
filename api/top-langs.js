@@ -1,3 +1,4 @@
+// api/top-langs.js
 // @ts-check
 
 import { renderTopLanguages } from "../src/cards/top-languages.js";
@@ -16,6 +17,7 @@ import { parseArray, parseBoolean } from "../src/common/ops.js";
 import { renderError } from "../src/common/render.js";
 import { fetchTopLanguages } from "../src/fetchers/top-languages.js";
 import { isLocaleAvailable } from "../src/translations.js";
+import { githubToken } from "../src/common/envs.js"; // <-- add this in envs.js
 
 // @ts-ignore
 export default async (req, res) => {
@@ -43,8 +45,10 @@ export default async (req, res) => {
     hide_progress,
     stats_format,
   } = req.query;
+
   res.setHeader("Content-Type", "image/svg+xml");
 
+  // Whitelist guard
   const access = guardAccess({
     res,
     id: username,
@@ -61,22 +65,18 @@ export default async (req, res) => {
     return access.result;
   }
 
+  // Locale validation
   if (locale && !isLocaleAvailable(locale)) {
     return res.send(
       renderError({
         message: "Something went wrong",
         secondaryMessage: "Locale not found",
-        renderOptions: {
-          title_color,
-          text_color,
-          bg_color,
-          border_color,
-          theme,
-        },
+        renderOptions: { title_color, text_color, bg_color, border_color, theme },
       }),
     );
   }
 
+  // Layout validation
   if (
     layout !== undefined &&
     (typeof layout !== "string" ||
@@ -86,17 +86,12 @@ export default async (req, res) => {
       renderError({
         message: "Something went wrong",
         secondaryMessage: "Incorrect layout input",
-        renderOptions: {
-          title_color,
-          text_color,
-          bg_color,
-          border_color,
-          theme,
-        },
+        renderOptions: { title_color, text_color, bg_color, border_color, theme },
       }),
     );
   }
 
+  // Stats format validation
   if (
     stats_format !== undefined &&
     (typeof stats_format !== "string" ||
@@ -106,24 +101,24 @@ export default async (req, res) => {
       renderError({
         message: "Something went wrong",
         secondaryMessage: "Incorrect stats_format input",
-        renderOptions: {
-          title_color,
-          text_color,
-          bg_color,
-          border_color,
-          theme,
-        },
+        renderOptions: { title_color, text_color, bg_color, border_color, theme },
       }),
     );
   }
 
   try {
+    if (!githubToken) {
+      throw new Error("No GitHub PAT found in environment");
+    }
+
     const topLangs = await fetchTopLanguages(
       username,
       parseArray(exclude_repo),
       size_weight,
       count_weight,
+      githubToken, // <-- pass token into fetcher
     );
+
     const cacheSeconds = resolveCacheSeconds({
       requested: parseInt(cache_seconds, 10),
       def: CACHE_TTL.TOP_LANGS_CARD.DEFAULT,
@@ -175,13 +170,7 @@ export default async (req, res) => {
     return res.send(
       renderError({
         message: "An unknown error occurred",
-        renderOptions: {
-          title_color,
-          text_color,
-          bg_color,
-          border_color,
-          theme,
-        },
+        renderOptions: { title_color, text_color, bg_color, border_color, theme },
       }),
     );
   }

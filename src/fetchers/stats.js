@@ -121,6 +121,13 @@ const statsFetcher = async ({
   let stats;
   let hasNextPage = true;
   let endCursor = null;
+
+  // Pick up token from environment
+  const token = process.env.PAT || process.env.PAT_1 || process.env.GITHUB_TOKEN;
+  if (!token) {
+    throw new Error("No GitHub PAT found in environment");
+  }
+
   while (hasNextPage) {
     const variables = {
       login: username,
@@ -131,12 +138,13 @@ const statsFetcher = async ({
       includeDiscussionsAnswers,
       startTime,
     };
-    let res = await retryer(fetcher, variables);
+
+    // Pass token into fetcher
+    let res = await retryer(fetcher, variables, token);
     if (res.data.errors) {
       return res;
     }
 
-    // Store stats data.
     const repoNodes = res.data.data.user.repositories.nodes;
     if (stats) {
       stats.data.data.user.repositories.nodes.push(...repoNodes);
@@ -144,7 +152,6 @@ const statsFetcher = async ({
       stats = res;
     }
 
-    // Disable multi page fetching on public Vercel instance due to rate limits.
     const repoNodesWithStars = repoNodes.filter(
       (node) => node.stargazers.totalCount !== 0,
     );
