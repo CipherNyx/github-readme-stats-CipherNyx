@@ -1,49 +1,55 @@
 // src/common/envs.js
 // @ts-check
 
-/**
- * Utility: convert comma-separated env var to array.
- * Trims whitespace and optionally lowercases entries.
- */
 const toArray = (str, { lowercase = false } = {}) =>
   (str || "")
     .split(",")
     .map((s) => (lowercase ? s.trim().toLowerCase() : s.trim()))
     .filter(Boolean);
 
-/**
- * Whitelist of usernames/orgs allowed.
- * Example env: WHITELIST="CipherNyx,Universal-Coding-Experiments"
- */
-const whitelist = process.env.WHITELIST
-  ? toArray(process.env.WHITELIST, { lowercase: true })
-  : undefined;
+// Whitelist of usernames/orgs allowed
+const whitelist = toArray(process.env.WHITELIST || "", { lowercase: true });
+
+// Whitelist of gist IDs allowed
+const gistWhitelist = toArray(process.env.GIST_WHITELIST || "");
+
+// Repositories to exclude from stats
+const excludeRepositories = toArray(process.env.EXCLUDE_REPO || "");
+
+// Count PAT_N environment variables and expose helper to get them
+const patKeys = Object.keys(process.env).filter((k) => /^PAT_\d+$/.test(k));
+const PAT_COUNT = patKeys.length;
 
 /**
- * Whitelist of gist IDs allowed.
- * Example env: GIST_WHITELIST="abcd1234,efgh5678"
+ * Get PAT by 1-based index. Returns null if not found.
+ * @param {number} idx 1-based index
+ * @returns {string|null}
  */
-const gistWhitelist = process.env.GIST_WHITELIST
-  ? toArray(process.env.GIST_WHITELIST)
-  : undefined;
+function getPatByIndex(idx) {
+  if (!Number.isInteger(idx) || idx < 1) return null;
+  return process.env[`PAT_${idx}`] || null;
+}
 
-/**
- * Repositories to exclude from stats.
- * Example env: EXCLUDE_REPO="repo1,repo2"
- */
-const excludeRepositories = process.env.EXCLUDE_REPO
-  ? toArray(process.env.EXCLUDE_REPO)
-  : [];
+// Primary token selection precedence
+// Prefer PAT_1, then PAT_2, ..., then PAT, then GITHUB_TOKEN
+let githubToken = null;
+if (process.env.PAT_1) {
+  githubToken = process.env.PAT_1;
+} else if (PAT_COUNT > 0) {
+  // fallback to first PAT_N if PAT_1 not present but others exist
+  githubToken = getPatByIndex(1);
+} else if (process.env.PAT) {
+  githubToken = process.env.PAT;
+} else if (process.env.GITHUB_TOKEN) {
+  githubToken = process.env.GITHUB_TOKEN;
+}
 
-/**
- * GitHub Personal Access Token.
- * Supports multiple tokens (PAT_1, PAT_2, …) or a single PAT/GITHUB_TOKEN.
- */
-export const githubToken =
-  process.env.PAT ||
-  process.env.GITHUB_TOKEN ||
-  process.env.PAT_1 ||
-  process.env.PAT_2 ||
-  null;
-
-export { whitelist, gistWhitelist, excludeRepositories, githubToken };
+export {
+  toArray,
+  whitelist,
+  gistWhitelist,
+  excludeRepositories,
+  githubToken,
+  PAT_COUNT,
+  getPatByIndex,
+};
