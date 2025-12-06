@@ -108,24 +108,35 @@ const fetchTopLanguages = async (
     );
   }
 
+  // If GraphQL returned errors, log them — but only treat them as fatal
+  // when there is no usable data (neither user nor org).
   if (res.data.errors) {
     logger.error(res.data.errors);
-    if (res.data.errors[0] && res.data.errors[0].type === "NOT_FOUND") {
+
+    // If we have usable data (user or org repositories), ignore errors about missing user
+    const hasUser = !!res.data.data?.user;
+    const hasOrg = !!res.data.data?.org;
+    if (!hasUser && !hasOrg) {
+      // No usable data — surface the most relevant GraphQL error
+      const firstErr = res.data.errors[0];
+      if (firstErr && firstErr.type === "NOT_FOUND") {
+        throw new CustomError(
+          firstErr.message || "Could not fetch user or organization.",
+          CustomError.USER_NOT_FOUND,
+        );
+      }
+      if (firstErr && firstErr.message) {
+        throw new CustomError(
+          wrapTextMultiline(firstErr.message, 90, 1)[0],
+          res.statusText,
+        );
+      }
       throw new CustomError(
-        res.data.errors[0].message || "Could not fetch user or organization.",
-        CustomError.USER_NOT_FOUND,
+        "Something went wrong while trying to retrieve the language data using the GraphQL API.",
+        CustomError.GRAPHQL_ERROR,
       );
     }
-    if (res.data.errors[0] && res.data.errors[0].message) {
-      throw new CustomError(
-        wrapTextMultiline(res.data.errors[0].message, 90, 1)[0],
-        res.statusText,
-      );
-    }
-    throw new CustomError(
-      "Something went wrong while trying to retrieve the language data using the GraphQL API.",
-      CustomError.GRAPHQL_ERROR,
-    );
+    // If we do have user or org data, continue — the error(s) were non-fatal (e.g., user lookup failed but org succeeded)
   }
 
   // Prefer user result; fallback to org result
